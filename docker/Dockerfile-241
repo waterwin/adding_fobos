@@ -1,0 +1,82 @@
+# Test for building libfobos in advance of ka9q_radio
+# Multi-stage build for ka9q_ubersdr on Ubuntu 24.04
+FROM ubuntu:24.04
+
+# Install dependencies for libfobos
+RUN apt-get update && apt-get install -y \
+    cmake \
+    git \
+    pkg-config \
+    libusb-1.0-0-dev \
+	usbutils \
+	build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Build argument for target architecture (set automatically by docker buildx)
+ARG TARGETARCH
+
+# Add some locales
+RUN apt-get update && apt-get install -y locales && rm -rf /var/lib/apt/lists/* \
+	&& localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
+ENV LANG=en_US.utf8
+
+# Set working directory
+WORKDIR /home/ubuntu/
+
+USER ubuntu
+
+# Install libfobos from RigExpert github for version 2.4.1 
+# (sh script uses rigexpert version !!)
+RUN git clone https://github.com/rigexpert/libfobos.git
+
+# Set working directory
+WORKDIR /home/ubuntu/libfobos/build
+
+# I ran the libfobos install before from a sh script, will it work with run commands as well, 
+# will it try to do all in parallel
+RUN cmake ..
+RUN make
+
+USER root
+RUN make install
+
+RUN sed -i 's/TAG+="uaccess"/GROUP="plugdev"/' /etc/udev/rules.d/fobos-sdr.rules
+# does not find dir RUN /lib/systemd/systemd-udevd --daemon
+
+#run a test
+RUN ./fobos_devinfo
+#or two
+RUN ./fobos_recorder
+
+# Copy pre-built binary from builder
+#COPY --from=builder /build/ka9q_ubersdr /usr/local/bin/ka9q_ubersdr
+#RUN chmod +x /usr/local/bin/ka9q_ubersdr
+
+# Copy entrypoint script
+#COPY docker/entrypoint.sh /entrypoint.sh
+#RUN chmod +x /entrypoint.sh
+
+# Expose default ports
+# 8080 - Web interface (as configured in config.yaml)
+# 8073 - KiwiSDR protocol compatibility (if enabled in config)
+# 8901 - WebSDR protocol compatibility (if enabled in config)
+EXPOSE 8090/tcp
+#EXPOSE 8073/tcp
+#EXPOSE 8901/tcp
+
+# Environment variables
+ENV TZ=UTC
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/ || exit 1
+
+# Use entrypoint script to handle configuration
+#ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command
+#CMD ["ka9q_ubersdr"]
+CMD ["/bin/bash"]
